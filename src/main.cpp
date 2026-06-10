@@ -41,6 +41,38 @@ static bool             g_loop = false;
 static float            g_volume = 1.0f;
 static bool             g_quit = false;
 
+// ---- FX chain state ----
+
+struct FxInstance
+{
+    std::string type;
+    std::string label;
+    bool        window_open = true;
+
+    // Break Beat params
+    struct {
+        float speed     = 1.0f;
+        float intensity = 0.5f;
+        int   pattern   = 0;
+    } bb;
+};
+
+static std::vector<FxInstance> g_fx_chain;
+static int g_next_bb_id = 1;
+static bool g_show_fx_chain = true;
+
+static void add_fx_instance(const char* type)
+{
+    FxInstance inst;
+    inst.type = type;
+    if (strcmp(type, "Break Beat") == 0)
+    {
+        inst.label = "Break Beat " + std::to_string(g_next_bb_id++);
+        inst.window_open = true;
+    }
+    g_fx_chain.push_back(inst);
+}
+
 // ---- File browser state ----
 
 static bool             g_show_browser = false;
@@ -308,10 +340,101 @@ static void draw_audio_player()
         if (g_sound_inited)
             ma_sound_set_looping(&g_sound, g_loop);
 
+    // Process
     ImGui::Dummy(ImVec2(0, 4));
     ImGui::Separator();
+    ImGui::BeginDisabled(g_fx_chain.empty());
+    if (ImGui::Button("Process", ImVec2(120, 0)))
+    {
+        // TODO: implement processing logic
+    }
+    ImGui::EndDisabled();
     ImGui::Text("Application avg %.3f ms/frame (%.1f FPS)",
         1000.0 / ImGui::GetIO().Framerate, ImGui::GetIO().Framerate);
+
+    ImGui::End();
+}
+
+// ---- FX Chain window ----
+
+static void draw_fx_chain(bool* open)
+{
+    if (!*open) return;
+
+    ImGui::SetNextWindowSize(ImVec2(320, 260), ImGuiCond_FirstUseEver);
+    if (!ImGui::Begin("FX Chain", open, ImGuiWindowFlags_NoDocking))
+    {
+        ImGui::End();
+        return;
+    }
+
+    if (ImGui::BeginChild("##fxlist", ImVec2(0, -ImGui::GetFrameHeightWithSpacing() - 10), true))
+    {
+        for (int i = 0; i < (int)g_fx_chain.size(); i++)
+        {
+            // Move up
+            ImGui::BeginDisabled(i == 0);
+            if (ImGui::ArrowButton((std::to_string(i) + "u").c_str(), ImGuiDir_Up))
+                std::swap(g_fx_chain[i], g_fx_chain[i - 1]);
+            ImGui::EndDisabled();
+            ImGui::SameLine();
+
+            // Move down
+            ImGui::BeginDisabled(i == (int)g_fx_chain.size() - 1);
+            if (ImGui::ArrowButton((std::to_string(i) + "d").c_str(), ImGuiDir_Down))
+                std::swap(g_fx_chain[i], g_fx_chain[i + 1]);
+            ImGui::EndDisabled();
+            ImGui::SameLine();
+
+            // Remove
+            if (ImGui::SmallButton((std::string("X##") + std::to_string(i)).c_str()))
+            {
+                g_fx_chain.erase(g_fx_chain.begin() + i);
+                i--;
+                continue;
+            }
+            ImGui::SameLine();
+
+            // Click to focus that effect's window
+            if (ImGui::Selectable(g_fx_chain[i].label.c_str(), false, ImGuiSelectableFlags_SpanAllColumns))
+                ImGui::SetWindowFocus(g_fx_chain[i].label.c_str());
+        }
+    }
+    ImGui::EndChild();
+
+    // Add effect
+    ImGui::Separator();
+    static int add_type = 0;
+    const char* items[] = { "Break Beat" };
+    ImGui::Combo("##addfx", &add_type, items, IM_ARRAYSIZE(items));
+    ImGui::SameLine();
+    if (ImGui::Button("Add"))
+        add_fx_instance(items[add_type]);
+
+    ImGui::End();
+}
+
+// ---- Break Beat window ----
+
+static void draw_break_beat(FxInstance& inst)
+{
+    if (!inst.window_open) return;
+
+    ImGui::SetNextWindowSize(ImVec2(300, 200), ImGuiCond_FirstUseEver);
+    if (!ImGui::Begin(inst.label.c_str(), &inst.window_open, ImGuiWindowFlags_NoDocking))
+    {
+        ImGui::End();
+        return;
+    }
+
+    ImGui::SliderFloat("Speed", &inst.bb.speed, 0.25f, 4.0f, "%.2fx");
+    ImGui::SliderFloat("Intensity", &inst.bb.intensity, 0.0f, 1.0f, "%.2f");
+    ImGui::Combo("Pattern", &inst.bb.pattern, "Half-Time\0Double-Time\0Random-Gate\0Stutter\0\0");
+
+    ImGui::Dummy(ImVec2(0, 4));
+    ImGui::Separator();
+    ImGui::Dummy(ImVec2(0, 2));
+    ImGui::TextDisabled("Configure how the break-beat effect\nmanipulates the audio.");
 
     ImGui::End();
 }
@@ -441,7 +564,8 @@ int main(int, char**)
             }
             if (ImGui::BeginMenu("FX"))
             {
-                if (ImGui::MenuItem("Break Beat")) {}
+                if (ImGui::MenuItem("Break Beat"))
+                    add_fx_instance("Break Beat");
                 ImGui::EndMenu();
             }
             ImGui::EndMenuBar();
@@ -452,6 +576,18 @@ int main(int, char**)
         update_playing_state();
         draw_audio_player();
         draw_file_browser(&g_show_browser);
+        draw_fx_chain(&g_show_fx_chain);
+
+        for (auto& inst : g_fx_chain)
+        {
+            if (inst.type == "Break Beat")
+                draw_break_beat(inst);
+        }
+
+        // Remove closed instances
+        for (int i = (int)g_fx_chain.size() - 1; i >= 0; i--)
+            if (!g_fx_chain[i].window_open)
+                g_fx_chain.erase(g_fx_chain.begin() + i);
 
         ImGui::End();
 
