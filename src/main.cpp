@@ -51,7 +51,8 @@ struct FxInstance
 
     // Break Beat params
     struct {
-        int   division_idx = 2; // 1/4
+        int   division_idx     = 2; // 1/4
+        float random_intensity = 1.0f;
     } bb;
 };
 
@@ -539,13 +540,17 @@ static void draw_break_beat(FxInstance& inst)
         return;
     }
 
-    // Division selector on its own line
+    // Division selector
     const char* div_items = "1/1\0 1/2\0 1/4\0 1/8\0 1/16\0 1/32\0\0";
     ImGui::Combo("Divisions", &inst.bb.division_idx, div_items);
+
+    // Random Intensity slider
+    ImGui::SliderFloat("Random Intensity", &inst.bb.random_intensity, 0.0f, 1.0f, "%.2f");
 
     // Waveform with dividing lines
     ImVec2 avail = ImGui::GetContentRegionAvail();
     draw_waveform(avail, inst.bb.division_idx);
+    ImGui::Dummy(avail);
 
     ImGui::End();
 }
