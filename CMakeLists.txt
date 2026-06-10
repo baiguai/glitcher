@@ -22,6 +22,7 @@ add_executable(glitcher
 target_include_directories(glitcher PRIVATE
     deps/imgui
     deps/imgui/backends
+    deps
     ${GLFW3_INCLUDE_DIRS}
     ${GL_INCLUDE_DIRS}
 )
@@ -29,6 +30,7 @@ target_include_directories(glitcher PRIVATE
 target_link_libraries(glitcher PRIVATE
     ${GLFW3_LIBRARIES}
     ${GL_LIBRARIES}
+    dl
 )
 
 target_compile_options(glitcher PRIVATE ${GLFW3_CFLAGS_OTHER})
