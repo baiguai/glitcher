@@ -51,9 +51,6 @@ struct FxInstance
 
     // Break Beat params
     struct {
-        float speed       = 1.0f;
-        float intensity   = 0.5f;
-        int   pattern     = 0;
         int   division_idx = 2; // 1/4
     } bb;
 };
@@ -535,28 +532,20 @@ static void draw_break_beat(FxInstance& inst)
 {
     if (!inst.window_open) return;
 
-    ImGui::SetNextWindowSize(ImVec2(480, 320), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(ImVec2(480, 260), ImGuiCond_FirstUseEver);
     if (!ImGui::Begin(inst.label.c_str(), &inst.window_open, ImGuiWindowFlags_NoDocking))
     {
         ImGui::End();
         return;
     }
 
-    // Waveform
-    ImVec2 avail = ImGui::GetContentRegionAvail();
-    float wave_h = ImMax(avail.y - 80.0f, 80.0f);
-    draw_waveform(ImVec2(avail.x, wave_h), inst.bb.division_idx);
-    ImGui::SetCursorPosY(ImGui::GetCursorPosY() + 4);
-
-    // Controls below the waveform
+    // Division selector on its own line
     const char* div_items = "1/1\0 1/2\0 1/4\0 1/8\0 1/16\0 1/32\0\0";
     ImGui::Combo("Divisions", &inst.bb.division_idx, div_items);
-    ImGui::SameLine();
-    ImGui::SliderFloat("Speed", &inst.bb.speed, 0.25f, 4.0f, "%.2fx");
 
-    ImGui::SliderFloat("Intensity", &inst.bb.intensity, 0.0f, 1.0f, "%.2f");
-    ImGui::Combo("Pattern", &inst.bb.pattern,
-                 "Half-Time\0Double-Time\0Random-Gate\0Stutter\0\0");
+    // Waveform with dividing lines
+    ImVec2 avail = ImGui::GetContentRegionAvail();
+    draw_waveform(avail, inst.bb.division_idx);
 
     ImGui::End();
 }
