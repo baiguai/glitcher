@@ -51,11 +51,65 @@ struct FxInstance
 
     // Break Beat params
     struct {
-        float speed     = 1.0f;
-        float intensity = 0.5f;
-        int   pattern   = 0;
+        float speed       = 1.0f;
+        float intensity   = 0.5f;
+        int   pattern     = 0;
+        int   division_idx = 2; // 1/4
     } bb;
 };
+
+// ---- Loaded audio data for waveform display ----
+
+struct LoadedAudio
+{
+    std::vector<float> samples;
+    ma_uint32          sample_rate = 0;
+    ma_uint64          total_frames = 0;
+    ma_uint32          channels = 0;
+    bool               loaded = false;
+
+    // Pre-computed waveform downsampled to 2048 buckets
+    std::vector<float> wave_min;
+    std::vector<float> wave_max;
+};
+static LoadedAudio    g_audio_data;
+
+static void load_audio_file(const char* path)
+{
+    g_audio_data = {};
+
+    ma_decoder decoder;
+    if (ma_decoder_init_file(path, NULL, &decoder) != MA_SUCCESS)
+    {
+        fprintf(stderr, "Failed to decode: %s\n", path);
+        return;
+    }
+
+    g_audio_data.sample_rate  = decoder.outputSampleRate;
+    g_audio_data.channels     = decoder.outputChannels;
+    ma_decoder_get_length_in_pcm_frames(&decoder, &g_audio_data.total_frames);
+    g_audio_data.samples.resize(g_audio_data.total_frames * g_audio_data.channels);
+
+    ma_decoder_read_pcm_frames(&decoder, g_audio_data.samples.data(),
+                               g_audio_data.total_frames, NULL);
+    ma_decoder_uninit(&decoder);
+
+    // Downsample to 2048 min/max buckets for fast waveform drawing
+    const int buckets = 2048;
+    g_audio_data.wave_min.assign(buckets, 1.0f);
+    g_audio_data.wave_max.assign(buckets, -1.0f);
+
+    for (ma_uint64 f = 0; f < g_audio_data.total_frames; f++)
+    {
+        float s = g_audio_data.samples[f * g_audio_data.channels];
+        int b = (int)((double)f / g_audio_data.total_frames * buckets);
+        if (b >= buckets) b = buckets - 1;
+        if (s < g_audio_data.wave_min[b]) g_audio_data.wave_min[b] = s;
+        if (s > g_audio_data.wave_max[b]) g_audio_data.wave_max[b] = s;
+    }
+
+    g_audio_data.loaded = true;
+}
 
 static std::vector<FxInstance> g_fx_chain;
 static int g_next_bb_id = 1;
@@ -414,27 +468,95 @@ static void draw_fx_chain(bool* open)
     ImGui::End();
 }
 
+// ---- Waveform helpers ----
+
+static int division_to_count(int idx)
+{
+    static const int n[] = { 1, 2, 4, 8, 16, 32 };
+    return (idx >= 0 && idx < 6) ? n[idx] : 4;
+}
+
+static void draw_waveform(ImVec2 size, int division_idx)
+{
+    if (!g_audio_data.loaded)
+    {
+        const char* msg = "No audio loaded";
+        float tw = ImGui::CalcTextSize(msg).x;
+        ImGui::SetCursorPosX(ImGui::GetCursorPosX() + (size.x - tw) * 0.5f);
+        ImGui::Text("%s", msg);
+        return;
+    }
+
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    ImVec2 pos = ImGui::GetCursorScreenPos();
+
+    if (size.x <= 0 || size.y <= 0) return;
+
+    // Background
+    dl->AddRectFilled(pos, ImVec2(pos.x + size.x, pos.y + size.y),
+                      IM_COL32(16, 16, 24, 255));
+
+    // Waveform
+    float cy = pos.y + size.y * 0.5f;
+    float half = size.y * 0.45f;
+    int n = (int)g_audio_data.wave_min.size();
+
+    for (int i = 0; i < n; i++)
+    {
+        float x0 = pos.x + (float)i / n * size.x;
+        float x1 = pos.x + (float)(i + 1) / n * size.x;
+        float lo = cy + g_audio_data.wave_min[i] * half;
+        float hi = cy + g_audio_data.wave_max[i] * half;
+        if (hi < lo) std::swap(lo, hi);
+        dl->AddRectFilled(ImVec2(x0, lo), ImVec2(x1, hi),
+                          IM_COL32(120, 180, 255, 200));
+    }
+
+    // Dividing lines
+    int divs = division_to_count(division_idx);
+    if (divs > 1)
+    {
+        for (int i = 1; i < divs; i++)
+        {
+            float x = pos.x + (float)i / divs * size.x;
+            dl->AddLine(ImVec2(x, pos.y), ImVec2(x, pos.y + size.y),
+                        IM_COL32(255, 220, 80, 160), 1.0f);
+        }
+    }
+
+    // Border
+    dl->AddRect(pos, ImVec2(pos.x + size.x, pos.y + size.y),
+                IM_COL32(80, 80, 100, 255));
+}
+
 // ---- Break Beat window ----
 
 static void draw_break_beat(FxInstance& inst)
 {
     if (!inst.window_open) return;
 
-    ImGui::SetNextWindowSize(ImVec2(300, 200), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(ImVec2(480, 320), ImGuiCond_FirstUseEver);
     if (!ImGui::Begin(inst.label.c_str(), &inst.window_open, ImGuiWindowFlags_NoDocking))
     {
         ImGui::End();
         return;
     }
 
-    ImGui::SliderFloat("Speed", &inst.bb.speed, 0.25f, 4.0f, "%.2fx");
-    ImGui::SliderFloat("Intensity", &inst.bb.intensity, 0.0f, 1.0f, "%.2f");
-    ImGui::Combo("Pattern", &inst.bb.pattern, "Half-Time\0Double-Time\0Random-Gate\0Stutter\0\0");
+    // Waveform
+    ImVec2 avail = ImGui::GetContentRegionAvail();
+    float wave_h = ImMax(avail.y - 80.0f, 80.0f);
+    draw_waveform(ImVec2(avail.x, wave_h), inst.bb.division_idx);
+    ImGui::SetCursorPosY(ImGui::GetCursorPosY() + 4);
 
-    ImGui::Dummy(ImVec2(0, 4));
-    ImGui::Separator();
-    ImGui::Dummy(ImVec2(0, 2));
-    ImGui::TextDisabled("Configure how the break-beat effect\nmanipulates the audio.");
+    // Controls below the waveform
+    const char* div_items = "1/1\0 1/2\0 1/4\0 1/8\0 1/16\0 1/32\0\0";
+    ImGui::Combo("Divisions", &inst.bb.division_idx, div_items);
+    ImGui::SameLine();
+    ImGui::SliderFloat("Speed", &inst.bb.speed, 0.25f, 4.0f, "%.2fx");
+
+    ImGui::SliderFloat("Intensity", &inst.bb.intensity, 0.0f, 1.0f, "%.2f");
+    ImGui::Combo("Pattern", &inst.bb.pattern,
+                 "Half-Time\0Double-Time\0Random-Gate\0Stutter\0\0");
 
     ImGui::End();
 }
@@ -534,6 +656,17 @@ int main(int, char**)
         ImGui_ImplOpenGL3_NewFrame();
         ImGui_ImplGlfw_NewFrame();
         ImGui::NewFrame();
+
+        // Auto-decode when the current file changes
+        {
+            static std::string prev_file;
+            if (g_current_file != prev_file)
+            {
+                prev_file = g_current_file;
+                if (!g_current_file.empty())
+                    load_audio_file(g_current_file.c_str());
+            }
+        }
 
         // Dockspace host window with menu bar
         ImGuiViewport* viewport = ImGui::GetMainViewport();
